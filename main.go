@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -33,7 +34,7 @@ func main() {
 
 	// Parse the command line arguments to populate the flag variable
 	flag.BoolVar(&rFlag, "r", false, "Record session")
-	flag.StringVar(&filename, "p", "", "CSV file to reply.")
+	flag.StringVar(&filename, "p", "", "CSV file to re-play.")
 
 	// Call the flag.Parse() function to parse the command line arguments
 	flag.Parse()
@@ -51,12 +52,24 @@ func main() {
 		playing = true
 	}
 
-	positions = make([]MousePos, 0)
 	startTime = time.Now()
+	positions = make([]MousePos, 0)
 
 	if recording {
 		// run on separate thread
 		go CurrentMousePosition()
+
+	}
+
+	if playing {
+
+		positions, err := readSplice(filename)
+		if err != nil {
+			log.Fatalln("Error reading file.")
+		}
+
+		go replay(positions)
+
 	}
 
 	//// HANDLE INTERRUPT SIGNAL //////////////////////////////////////////
@@ -84,6 +97,50 @@ func cleanup() {
 	os.Exit(0)
 }
 
+func readSplice(filename string) ([]MousePos, error) {
+
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	reader := csv.NewReader(f)
+	var pos []MousePos
+
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			return nil, err
+		}
+
+		tc, err := strconv.ParseInt(record[0], 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		x, err := strconv.Atoi(record[1])
+		if err != nil {
+			return nil, err
+		}
+		y, err := strconv.Atoi(record[2])
+		if err != nil {
+			return nil, err
+		}
+
+		p := MousePos{
+			tc: tc,
+			x:  x,
+			y:  y,
+		}
+
+		pos = append(pos, p)
+	}
+
+	return pos, nil
+}
+
 func saveSplice(input []MousePos) {
 
 	// Get the current time
@@ -103,7 +160,7 @@ func saveSplice(input []MousePos) {
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	for _, pos := range positions {
+	for _, pos := range input {
 		err := writer.Write([]string{strconv.FormatInt(pos.tc, 10), strconv.Itoa(pos.x), strconv.Itoa(pos.y)})
 		if err != nil {
 			log.Fatal("Error writing record to CSV:", err)
@@ -115,12 +172,33 @@ func saveSplice(input []MousePos) {
 
 }
 
+var cnt = 0
+
+func replay(pos []MousePos) {
+	for {
+		x := pos[cnt].x
+		y := pos[cnt].y
+		cnt++
+
+		if cnt >= len(pos) {
+			log.Printf("Replay finished, looping.")
+			cnt = 0
+		}
+
+		//FIXME: precise timing using tc?
+		robotgo.MicroSleep(10)
+		robotgo.Move(x, y)
+	}
+
+}
+
 func CurrentMousePosition() {
 	for {
 		robotgo.MicroSleep(10)
 		x, y := robotgo.GetMousePos()
 		tc := time.Since(startTime).Milliseconds()
 		pos := MousePos{tc: tc, x: x, y: y}
+
 		positions = append(positions, pos)
 		fmt.Printf("tc:%d x:%d y:%d\n", tc, x, y)
 	}

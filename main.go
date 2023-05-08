@@ -13,12 +13,14 @@ import (
 	"time"
 
 	"github.com/go-vgo/robotgo"
+	hook "github.com/robotn/gohook"
 )
 
 type MousePos struct {
-	tc int64
-	x  int
-	y  int
+	tc   int64
+	kind int
+	x    int
+	y    int
 }
 
 var positions []MousePos
@@ -56,9 +58,10 @@ func main() {
 	positions = make([]MousePos, 0)
 
 	if recording {
+
 		// run on separate thread
 		go CurrentMousePosition()
-
+		go low()
 	}
 
 	if playing {
@@ -68,7 +71,7 @@ func main() {
 			log.Fatalln("Error reading file.")
 		}
 
-		go replay(positions)
+		go Replay(positions)
 
 	}
 
@@ -85,6 +88,21 @@ func main() {
 	// run the cleanup function
 	cleanup()
 	///////////////////////////////////////////////////////////////////
+}
+
+func low() {
+	evChan := hook.Start()
+	defer hook.End()
+
+	for ev := range evChan {
+
+		tc := time.Since(startTime).Milliseconds()
+
+		if ev.Clicks == 1 && ev.Kind == hook.MouseDown {
+			positions = append(positions, MousePos{tc: tc, kind: int(ev.Kind), x: int(ev.X), y: int(ev.Y)})
+			fmt.Printf("tc:%d kind:%d X:%d Y:%d\n", tc, ev.Kind, ev.X, ev.Y)
+		}
+	}
 }
 
 func cleanup() {
@@ -120,19 +138,25 @@ func readSplice(filename string) ([]MousePos, error) {
 		if err != nil {
 			return nil, err
 		}
-		x, err := strconv.Atoi(record[1])
+		kind, err := strconv.Atoi(record[1])
 		if err != nil {
 			return nil, err
 		}
-		y, err := strconv.Atoi(record[2])
+
+		x, err := strconv.Atoi(record[2])
+		if err != nil {
+			return nil, err
+		}
+		y, err := strconv.Atoi(record[3])
 		if err != nil {
 			return nil, err
 		}
 
 		p := MousePos{
-			tc: tc,
-			x:  x,
-			y:  y,
+			tc:   tc,
+			kind: kind,
+			x:    x,
+			y:    y,
 		}
 
 		pos = append(pos, p)
@@ -161,7 +185,7 @@ func saveSplice(input []MousePos) {
 	defer writer.Flush()
 
 	for _, pos := range input {
-		err := writer.Write([]string{strconv.FormatInt(pos.tc, 10), strconv.Itoa(pos.x), strconv.Itoa(pos.y)})
+		err := writer.Write([]string{strconv.FormatInt(pos.tc, 10), strconv.Itoa(pos.kind), strconv.Itoa(pos.x), strconv.Itoa(pos.y)})
 		if err != nil {
 			log.Fatal("Error writing record to CSV:", err)
 		}
@@ -174,20 +198,25 @@ func saveSplice(input []MousePos) {
 
 var cnt = 0
 
-func replay(pos []MousePos) {
+func Replay(pos []MousePos) {
 	for {
 		x := pos[cnt].x
 		y := pos[cnt].y
+
+		//FIXME: precise timing using tc?
+		robotgo.MicroSleep(10)
+		if pos[cnt].kind == 0 {
+			robotgo.Move(x, y)
+		} else if pos[cnt].kind == 8 {
+			robotgo.Click()
+		}
+
 		cnt++
 
 		if cnt >= len(pos) {
 			log.Printf("Replay finished, looping.")
 			cnt = 0
 		}
-
-		//FIXME: precise timing using tc?
-		robotgo.MicroSleep(10)
-		robotgo.Move(x, y)
 	}
 
 }
@@ -197,9 +226,10 @@ func CurrentMousePosition() {
 		robotgo.MicroSleep(10)
 		x, y := robotgo.GetMousePos()
 		tc := time.Since(startTime).Milliseconds()
-		pos := MousePos{tc: tc, x: x, y: y}
+		kind := 0
+		pos := MousePos{tc: tc, kind: 0, x: x, y: y}
 
 		positions = append(positions, pos)
-		fmt.Printf("tc:%d x:%d y:%d\n", tc, x, y)
+		fmt.Printf("tc:%d kind:%d x:%d y:%d\n", tc, kind, x, y)
 	}
 }
